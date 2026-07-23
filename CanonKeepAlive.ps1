@@ -1,13 +1,14 @@
-# Canon DSLR Keep-Alive (Pure CLI Mode - 100% Popup Free & Headless)
-# Auto-detects Canon camera USB connection and sends direct USB PTP heartbeat signals via digiCamControl CLI.
-# No desktop GUI windows open. No driver popup dialogs.
+# Canon DSLR Keep-Alive & Direct Live-View Engine
+# Loads DSLRCam.exe into PowerShell and calls MainViewModel.StartLiveView() directly in background.
+# 100% Headless. No App GUI Window Opens.
 
 param (
     [int]$IntervalMinutes = 2,  # Defaulted to 2 minutes for debugging
-    [string]$CmdAppPath = "C:\Program Files (x86)\digiCamControl\CameraControlCmd.exe"
+    [string]$DslrCamPath = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe"
 )
 
 $LogFile = Join-Path -Path $PSScriptRoot -ChildPath "keep_alive.log"
+$global:vm = $null
 
 function Write-Log {
     param ([string]$Message)
@@ -18,37 +19,70 @@ function Write-Log {
 }
 
 function Test-CanonUsbConnected {
-    # Query for connected imaging/camera devices
     $devices = Get-PnpDevice -Class "WPD", "Camera", "Image" -Status "OK" -ErrorAction SilentlyContinue | 
                Where-Object { $_.InstanceId -like "*VID_04A9*" -or $_.FriendlyName -like "*Canon*" }
     return ($null -ne $devices)
 }
 
-Write-Log "=== Canon USB Pure CLI Keep-Alive Service Started (Popup-Free Mode) ==="
+function Initialize-DirectLiveView {
+    if (Test-Path $DslrCamPath) {
+        try {
+            Write-Log "Loading Virtual Webcam assembly ($DslrCamPath)..."
+            Add-Type -Path "C:\Program Files (x86)\digiCamControl Virtual Webcam\Canon.Eos.Framework.dll" -ErrorAction SilentlyContinue
+            Add-Type -Path "C:\Program Files (x86)\digiCamControl Virtual Webcam\CameraControl.Devices.dll" -ErrorAction SilentlyContinue
+
+            $asm = [System.Reflection.Assembly]::LoadFrom($DslrCamPath)
+            $vmType = $asm.GetType("DSLRCam.ViewModel.MainViewModel")
+
+            Write-Log "Instantiating MainViewModel directly in background process..."
+            $global:vm = [System.Activator]::CreateInstance($vmType)
+
+            Write-Log "Connecting to Canon DSLR via DeviceManager..."
+            $null = $global:vm.DeviceManager.ConnectToCamera()
+            Start-Sleep -Seconds 3
+
+            if ($global:vm.CameraDevice) {
+                Write-Log "SUCCESS: Connected to $($global:vm.CameraDevice.DisplayName)!"
+                Write-Log "Invoking vm.StartLiveView() directly in background..."
+                $global:vm.StartLiveView()
+                Write-Log "SUCCESS: Live View mode and frame thread initialized!"
+                return $true
+            } else {
+                Write-Log "Camera not connected to DeviceManager yet."
+            }
+        } catch {
+            Write-Log "ERROR initializing MainViewModel: $_"
+        }
+    } else {
+        Write-Log "ERROR: DSLRCam.exe not found at $DslrCamPath"
+    }
+    return $false
+}
+
+Write-Log "=== Canon Direct MainViewModel Keep-Alive Started (Headless Mode) ==="
 Write-Log "Monitoring for Canon USB Connection..."
 
 while ($true) {
     $isUsbConnected = Test-CanonUsbConnected
 
     if ($isUsbConnected) {
-        Write-Log "Canon DSLR USB Connected! Sending background keep-alive heartbeat..."
-
-        if (Test-Path $CmdAppPath) {
-            try {
-                # Executes pure CLI command directly to Canon camera over USB without opening any GUI window or popup
-                $process = Start-Process -FilePath $CmdAppPath -ArgumentList "/nop" -WindowStyle Hidden -Wait -PassThru
-                Write-Log "SUCCESS [CLI]: Sent USB PTP keep-alive heartbeat to Canon DSLR."
-            } catch {
-                Write-Log "ERROR [CLI]: Failed to execute CLI keep-alive: $_"
-            }
+        if ($null -eq $global:vm -or $null -eq $global:vm.CameraDevice) {
+            $null = Initialize-DirectLiveView
         } else {
-            Write-Log "ERROR: digiCamControl CLI tool not found at $CmdAppPath"
+            try {
+                Write-Log "Sending Live View heartbeat to $($global:vm.CameraDevice.DisplayName)..."
+                $global:vm.GetLiveView()
+                Write-Log "SUCCESS [Direct VM]: Live View heartbeat sent."
+            } catch {
+                Write-Log "Refreshing Live View stream..."
+                try { $global:vm.StartLiveView() } catch {}
+            }
         }
 
         Write-Log "Next heartbeat in $IntervalMinutes minute(s)..."
         Start-Sleep -Seconds ($IntervalMinutes * 60)
     } else {
-        # Camera not plugged in yet, check again every 5 seconds
+        $global:vm = $null
         Start-Sleep -Seconds 5
     }
 }
