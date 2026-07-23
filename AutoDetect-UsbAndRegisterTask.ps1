@@ -3,7 +3,7 @@
 # finds the exact Event ID / Device ID for the user's system, and registers Task Scheduler.
 
 param (
-    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe"
+    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl\CameraControl.exe"
 )
 
 $ScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "CanonKeepAlive.ps1"

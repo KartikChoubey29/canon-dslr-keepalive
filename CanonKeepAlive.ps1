@@ -1,10 +1,10 @@
 # Canon DSLR Keep-Alive & Auto-Launch Script
-# Auto-detects Canon camera USB connection, launches Virtual Webcam/digiCamControl, and sends keep-alive signals.
+# Auto-detects Canon camera USB connection, launches digiCamControl, and sends keep-alive signals.
 
 param (
     [int]$IntervalMinutes = 15,
     [string]$ServerUrl = "http://localhost:5513/?CMD=LiveViewWnd_Show",
-    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe"
+    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl\CameraControl.exe"
 )
 
 $LogFile = Join-Path -Path $PSScriptRoot -ChildPath "keep_alive.log"
@@ -26,12 +26,19 @@ function Test-CanonUsbConnected {
 function Ensure-AppRunning {
     $process = Get-Process -Name "CameraControl", "DSLRCam", "CameraControlRemoteCmd" -ErrorAction SilentlyContinue
     if (-not $process) {
-        if (Test-Path $WebcamAppPath) {
-            Write-Log "Canon Camera USB detected! Auto-launching Virtual Webcam ($WebcamAppPath)..."
-            Start-Process -FilePath $WebcamAppPath
+        $mainApp = "C:\Program Files (x86)\digiCamControl\CameraControl.exe"
+        $virtualWebcamApp = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe"
+
+        if (Test-Path $mainApp) {
+            Write-Log "Canon Camera USB detected! Auto-launching digiCamControl ($mainApp)..."
+            Start-Process -FilePath $mainApp
+            Start-Sleep -Seconds 5
+        } elseif (Test-Path $virtualWebcamApp) {
+            Write-Log "Canon Camera USB detected! Auto-launching Virtual Webcam ($virtualWebcamApp)..."
+            Start-Process -FilePath $virtualWebcamApp
             Start-Sleep -Seconds 5
         } else {
-            Write-Log "Virtual Webcam app not found at $WebcamAppPath. Please open digiCamControl manually."
+            Write-Log "digiCamControl application not found. Please launch digiCamControl manually."
         }
     }
 }
@@ -44,7 +51,7 @@ while ($true) {
     $processRunning = Get-Process -Name "CameraControl", "DSLRCam", "CameraControlRemoteCmd" -ErrorAction SilentlyContinue
 
     if ($isUsbConnected -or $processRunning) {
-        # Ensure digiCamControl or Virtual Webcam is open
+        # Ensure digiCamControl is open
         Ensure-AppRunning
 
         try {
