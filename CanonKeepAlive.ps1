@@ -1,10 +1,11 @@
-# Canon DSLR Keep-Alive & Auto-Launch Script
-# Auto-detects Canon camera USB connection, launches digiCamControl, and sends keep-alive signals.
+# Canon DSLR Keep-Alive & Auto-Launch Script (Silent Backend Mode)
+# Auto-detects Canon camera USB connection, launches digiCamControl in hidden mode, and sends keep-alive signals.
 
 param (
-    [int]$IntervalMinutes = 15,
+    [int]$IntervalMinutes = 2,  # Defaulted to 2 minutes for debugging
     [string]$ServerUrl = "http://localhost:5513/?CMD=LiveViewWnd_Show",
-    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl\CameraControl.exe"
+    [string]$MainAppPath = "C:\Program Files (x86)\digiCamControl\CameraControl.exe",
+    [string]$CmdAppPath = "C:\Program Files (x86)\digiCamControl\CameraControlCmd.exe"
 )
 
 $LogFile = Join-Path -Path $PSScriptRoot -ChildPath "keep_alive.log"
@@ -26,16 +27,14 @@ function Test-CanonUsbConnected {
 function Ensure-AppRunning {
     $process = Get-Process -Name "CameraControl", "DSLRCam", "CameraControlRemoteCmd" -ErrorAction SilentlyContinue
     if (-not $process) {
-        $mainApp = "C:\Program Files (x86)\digiCamControl\CameraControl.exe"
-        $virtualWebcamApp = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe"
-
-        if (Test-Path $mainApp) {
-            Write-Log "Canon Camera USB detected! Auto-launching digiCamControl ($mainApp)..."
-            Start-Process -FilePath $mainApp
+        if (Test-Path $MainAppPath) {
+            Write-Log "Canon Camera USB detected! Auto-launching digiCamControl SILENTLY ($MainAppPath)..."
+            # Launch hidden in backend without showing GUI window on screen
+            Start-Process -FilePath $MainAppPath -WindowStyle Hidden
             Start-Sleep -Seconds 5
-        } elseif (Test-Path $virtualWebcamApp) {
-            Write-Log "Canon Camera USB detected! Auto-launching Virtual Webcam ($virtualWebcamApp)..."
-            Start-Process -FilePath $virtualWebcamApp
+        } elseif (Test-Path $CmdAppPath) {
+            Write-Log "Auto-launching digiCamControl CLI ($CmdAppPath)..."
+            Start-Process -FilePath $CmdAppPath -ArgumentList "/server" -WindowStyle Hidden
             Start-Sleep -Seconds 5
         } else {
             Write-Log "digiCamControl application not found. Please launch digiCamControl manually."
@@ -43,7 +42,7 @@ function Ensure-AppRunning {
     }
 }
 
-Write-Log "=== Canon USB Auto-Detector & Keep-Alive Service Started ==="
+Write-Log "=== Canon USB Auto-Detector & Keep-Alive Service Started (Debug Interval: $IntervalMinutes Min) ==="
 Write-Log "Monitoring for Canon USB Connection..."
 
 while ($true) {
@@ -51,24 +50,41 @@ while ($true) {
     $processRunning = Get-Process -Name "CameraControl", "DSLRCam", "CameraControlRemoteCmd" -ErrorAction SilentlyContinue
 
     if ($isUsbConnected -or $processRunning) {
-        # Ensure digiCamControl is open
+        # Ensure digiCamControl is running in silent mode
         Ensure-AppRunning
 
+        $sentSuccess = $false
+
+        # 1. Try sending HTTP Keep-Alive signal
         try {
-            $response = Invoke-WebRequest -Uri $ServerUrl -Method Get -TimeoutSec 10 -UseBasicParsing
+            $response = Invoke-WebRequest -Uri $ServerUrl -Method Get -TimeoutSec 5 -UseBasicParsing
             if ($response.StatusCode -eq 200) {
-                Write-Log "SUCCESS: Sent keep-alive signal to digiCamControl."
-            } else {
-                Write-Log "WARNING: Received status code $($response.StatusCode)"
+                Write-Log "SUCCESS [HTTP]: Sent keep-alive signal to digiCamControl server."
+                $sentSuccess = $true
             }
         } catch {
-            Write-Log "ERROR: Could not reach digiCamControl API ($($_.Exception.Message)). Ensure Web Server is enabled in digiCamControl Settings."
+            # HTTP server might be starting or disabled
         }
 
-        # Sleep for the configured interval before sending next keep-alive
+        # 2. Fallback / Direct CLI keep-alive signal via CameraControlCmd.exe
+        if (-not $sentSuccess -and (Test-Path $CmdAppPath)) {
+            try {
+                Start-Process -FilePath $CmdAppPath -ArgumentList "/c LiveViewWnd_Show" -WindowStyle Hidden -Wait
+                Write-Log "SUCCESS [CLI]: Triggered keep-alive via CameraControlCmd.exe."
+                $sentSuccess = $true
+            } catch {
+                Write-Log "ERROR [CLI]: Failed to send CLI command: $_"
+            }
+        }
+
+        if (-not $sentSuccess) {
+            Write-Log "WARNING: Could not reach digiCamControl HTTP API or CLI. Ensure Web Server is enabled in Settings."
+        }
+
+        Write-Log "Next heartbeat in $IntervalMinutes minute(s)..."
         Start-Sleep -Seconds ($IntervalMinutes * 60)
     } else {
-        # Camera not plugged in yet, check again every 10 seconds silently
+        # Camera not connected yet, check again every 10 seconds
         Start-Sleep -Seconds 10
     }
 }
