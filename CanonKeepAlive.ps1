@@ -3,7 +3,7 @@
 # NO GUI application is opened.
 
 param (
-    [int]$IntervalMinutes = 2
+    [int]$IntervalMinutes = 25  # Sends explicit keep-alive heartbeat every 25 mins
 )
 
 $LogFile = Join-Path -Path $PSScriptRoot -ChildPath "keep_alive.log"
@@ -78,8 +78,13 @@ while ($true) {
                 Write-Log "Virtual Webcam directory not found: $appDir"
             }
         } else {
-            # Already running, just send a heartbeat log
-            Write-Log "Virtual webcam is actively running in the background. Next check in $IntervalMinutes minute(s)..."
+            # Already running, send a heartbeat ping
+            Write-Log "Virtual webcam is actively running in the background."
+            if ($global:vm.CameraDevice) {
+                Write-Log "Sending explicit keep-alive USB pulse to $($global:vm.CameraDevice.DisplayName)..."
+                try { $global:vm.GetLiveView() | Out-Null } catch {}
+                Write-Log "SUCCESS: Keep-alive pulse sent. Next check in $IntervalMinutes minute(s)..."
+            }
         }
         
         Start-Sleep -Seconds ($IntervalMinutes * 60)
