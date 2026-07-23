@@ -60,7 +60,7 @@ CanonKeepAlive/
 
 ### Option 1: Automated 1-Click Setup (Recommended for Any User)
 
-We provide an automated setup script **`AutoDetect-UsbAndRegisterTask.ps1`** that automatically inspects your Windows system, finds your connected Canon camera, enables Windows Event Logging if needed, and registers Task Scheduler:
+This is an setup script **`AutoDetect-UsbAndRegisterTask.ps1`** that automatically inspects your Windows system, finds your connected Canon camera, enables Windows Event Logging if needed, and registers Task Scheduler:
 
 1. Open **PowerShell as Administrator**.
 2. Run the automated installer:
