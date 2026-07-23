@@ -92,12 +92,15 @@ function Click-StartLiveViewAndMinimize {
 }
 
 function Ensure-VirtualWebcamRunning {
+    # Terminate any orphaned CLI utility processes that lock the Canon USB session
+    Stop-Process -Name "CameraControlCmd", "CameraControlRemoteCmd" -Force -ErrorAction SilentlyContinue
+
     $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue
     if (-not $proc) {
         if (Test-Path $WebcamAppPath) {
             Write-Log "Canon USB connected! Auto-launching digiCamControl Virtual Webcam..."
             
-            # Set working directory to Virtual Webcam folder so driver loads
+            # Set working directory to Virtual Webcam folder so vcam.dll driver loads
             $appDir = "C:\Program Files (x86)\digiCamControl Virtual Webcam"
             [System.IO.Directory]::SetCurrentDirectory($appDir)
             Set-Location $appDir
