@@ -1,0 +1,7 @@
+# Log files
+*.log
+keep_alive.log
+
+# Temporary / OS files
+.DS_Store
+Thumbs.db
