@@ -1,5 +1,5 @@
 # Canon DSLR Live View Auto-Start & Keep-Alive Automation
-# Launches Virtual Webcam, automatically clicks 'Start Live View' to clear Canon PC screen,
+# Launches Virtual Webcam, automatically clicks 'Start Live View' via MainWindowHandle to clear Canon PC screen,
 # minimizes the app window to the taskbar, and sends periodic keep-alive heartbeats.
 
 param (
@@ -19,9 +19,6 @@ using System.Runtime.InteropServices;
 public class Win32Window {
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    
-    [DllImport("user32.dll")]
-    public static extern bool IsWindowVisible(IntPtr hWnd);
 }
 "@ -ErrorAction SilentlyContinue
 
@@ -41,27 +38,17 @@ function Test-CanonUsbConnected {
 
 function Click-StartLiveViewAndMinimize {
     try {
-        $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            "digiCamControl Virtual Webcam Configuration"
-        )
-
-        $window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-
-        if ($null -eq $window) {
-            $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($proc) {
-                $procCondition = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-                    $proc.Id
-                )
-                $window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $procCondition)
-            }
+        $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
+            Write-Log "DSLRCam window handle not ready yet."
+            return $false
         }
 
+        # Grabbing AutomationElement directly from the process MainWindowHandle (100% reliable)
+        $window = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+
         if ($window) {
-            # Find and Click "Start Live View" button
+            # Search for Button with Name 'Start Live View'
             $btnCondition = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::NameProperty,
                 "Start Live View"
@@ -71,18 +58,14 @@ function Click-StartLiveViewAndMinimize {
             if ($button) {
                 $invokePattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
-                Write-Log "SUCCESS [UI Automation]: Clicked 'Start Live View' button! Canon camera is now streaming live."
+                Write-Log "SUCCESS [UI Automation]: Programmatically CLICKED 'Start Live View' button! Canon camera is live."
                 
-                # Minimize Virtual Webcam window after 1 second so it runs quietly on taskbar
                 Start-Sleep -Seconds 1
-                $hWnd = [IntPtr]$window.Current.NativeWindowHandle
-                if ($hWnd -ne [IntPtr]::Zero) {
-                    [Win32Window]::ShowWindow($hWnd, 6) # 6 = SW_MINIMIZE
-                    Write-Log "SUCCESS: Minimized Virtual Webcam window to taskbar."
-                }
+                [Win32Window]::ShowWindow($proc.MainWindowHandle, 6) # 6 = SW_MINIMIZE
+                Write-Log "SUCCESS: Minimized Virtual Webcam window to taskbar."
                 return $true
             } else {
-                Write-Log "Found Virtual Webcam window. Live View button may already be active."
+                Write-Log "Found Virtual Webcam window, but 'Start Live View' button was not found or is already active."
             }
         }
     } catch {
@@ -92,7 +75,7 @@ function Click-StartLiveViewAndMinimize {
 }
 
 function Ensure-VirtualWebcamRunning {
-    # Terminate any orphaned CLI utility processes that lock the Canon USB session
+    # Terminate any orphaned CLI utility processes holding Canon USB session
     Stop-Process -Name "CameraControlCmd", "CameraControlRemoteCmd" -Force -ErrorAction SilentlyContinue
 
     $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue
@@ -106,7 +89,7 @@ function Ensure-VirtualWebcamRunning {
             Set-Location $appDir
             
             Start-Process -FilePath $WebcamAppPath
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 4
         } else {
             Write-Log "ERROR: Virtual Webcam app not found at $WebcamAppPath"
         }
