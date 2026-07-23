@@ -1,18 +1,12 @@
-# Canon DSLR Live View Auto-Start & Keep-Alive Automation
-# Automatically clicks 'Start Live View' in Virtual Webcam (DSLRCam.exe) to start live video streaming (FPS > 20),
-# and sends background keep-alive heartbeats.
+# Canon DSLR Live View Auto-Start & Keep-Alive Automation (100% Background Process)
+# Loads Virtual Webcam logic directly into PowerShell and starts the live view feed.
+# NO GUI application is opened.
 
 param (
-    [int]$IntervalMinutes = 2,  # Defaulted to 2 minutes for debugging
-    [string]$WebcamAppPath = "C:\Program Files (x86)\digiCamControl Virtual Webcam\DSLRCam.exe",
-    [string]$CmdAppPath = "C:\Program Files (x86)\digiCamControl\CameraControlCmd.exe"
+    [int]$IntervalMinutes = 2
 )
 
 $LogFile = Join-Path -Path $PSScriptRoot -ChildPath "keep_alive.log"
-
-# Load UI Automation assemblies
-Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
-Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
 
 function Write-Log {
     param ([string]$Message)
@@ -28,73 +22,73 @@ function Test-CanonUsbConnected {
     return ($null -ne $devices)
 }
 
-function Trigger-StartLiveViewClick {
-    try {
-        $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
-            $window = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-            if ($window) {
-                $btnCondition = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::NameProperty,
-                    "Start Live View"
-                )
-                $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $btnCondition)
-
-                if ($button) {
-                    $invokePattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                    $invokePattern.Invoke()
-                    Write-Log "SUCCESS [UI Automation]: Programmatically CLICKED 'Start Live View' button in Virtual Webcam!"
-                    return $true
-                }
-            }
-        }
-    } catch {
-        Write-Log "WARNING [UI Automation]: Could not click button: $_"
-    }
-    return $false
-}
-
-function Ensure-VirtualWebcamRunning {
-    $proc = Get-Process -Name "DSLRCam" -ErrorAction SilentlyContinue
-    if (-not $proc) {
-        if (Test-Path $WebcamAppPath) {
-            Write-Log "Canon USB connected! Auto-launching digiCamControl Virtual Webcam..."
-            
-            # Set working directory to Virtual Webcam folder so driver loads cleanly
-            $appDir = "C:\Program Files (x86)\digiCamControl Virtual Webcam"
-            [System.IO.Directory]::SetCurrentDirectory($appDir)
-            Set-Location $appDir
-            
-            Start-Process -FilePath $WebcamAppPath
-            Start-Sleep -Seconds 4
-        }
-    }
-}
-
-Write-Log "=== Canon Live View Auto-Start & Keep-Alive Service Started (Interval: $IntervalMinutes Min) ==="
+Write-Log "=== Canon Headless Virtual Webcam & Keep-Alive Service Started ==="
 Write-Log "Monitoring for Canon USB Connection..."
+
+$global:vm = $null
 
 while ($true) {
     $isUsbConnected = Test-CanonUsbConnected
 
     if ($isUsbConnected) {
-        # Ensure Virtual Webcam app is open
-        Ensure-VirtualWebcamRunning
+        if ($null -eq $global:vm) {
+            Write-Log "Canon USB connected! Initializing background Virtual Webcam feed..."
+            
+            # Kill orphaned CLI processes
+            Stop-Process -Name "CameraControlCmd", "CameraControlRemoteCmd" -Force -ErrorAction SilentlyContinue
 
-        # Click "Start Live View" to trigger active video stream (FPS > 20)
-        $clicked = Trigger-StartLiveViewClick
+            # Ensure DSLRCam GUI isn't running so we don't conflict
+            Stop-Process -Name "DSLRCam" -Force -ErrorAction SilentlyContinue
 
-        # Send CLI heartbeat
-        if (Test-Path $CmdAppPath) {
-            try {
-                Start-Process -FilePath $CmdAppPath -ArgumentList "/nop" -WindowStyle Hidden -Wait
-                Write-Log "SUCCESS [CLI Heartbeat]: Sent PTP keep-alive signal to Canon DSLR."
-            } catch {}
+            $appDir = "C:\Program Files (x86)\digiCamControl Virtual Webcam"
+            if (Test-Path $appDir) {
+                try {
+                    # Crucial: Set Working Directory to Virtual Webcam folder so vcam.dll driver is found!
+                    [System.IO.Directory]::SetCurrentDirectory($appDir)
+                    Set-Location $appDir
+                    Write-Log "Working directory set to $appDir"
+
+                    Add-Type -Path (Join-Path $appDir "Canon.Eos.Framework.dll") -ErrorAction SilentlyContinue
+                    Add-Type -Path (Join-Path $appDir "CameraControl.Devices.dll") -ErrorAction SilentlyContinue
+
+                    $asm = [System.Reflection.Assembly]::LoadFrom((Join-Path $appDir "DSLRCam.exe"))
+                    $vmType = $asm.GetType("DSLRCam.ViewModel.MainViewModel")
+
+                    Write-Log "Instantiating MainViewModel directly in background process..."
+                    $global:vm = [System.Activator]::CreateInstance($vmType)
+
+                    Write-Log "Connecting to Canon DSLR..."
+                    $global:vm.DeviceManager.ConnectToCamera() | Out-Null
+                    Start-Sleep -Seconds 3
+
+                    if ($global:vm.CameraDevice) {
+                        Write-Log "SUCCESS: Connected to $($global:vm.CameraDevice.DisplayName)!"
+                        Write-Log "Invoking StartLiveView() directly in background..."
+                        $global:vm.StartLiveView()
+                        Write-Log "SUCCESS: Virtual Webcam feed is now active!"
+                    } else {
+                        Write-Log "Camera not connected to DeviceManager yet."
+                        $global:vm = $null
+                    }
+                } catch {
+                    Write-Log "ERROR initializing MainViewModel in background: $_"
+                    $global:vm = $null
+                }
+            } else {
+                Write-Log "Virtual Webcam directory not found: $appDir"
+            }
+        } else {
+            # Already running, just send a heartbeat log
+            Write-Log "Virtual webcam is actively running in the background. Next check in $IntervalMinutes minute(s)..."
         }
-
-        Write-Log "Next heartbeat check in $IntervalMinutes minute(s)..."
+        
         Start-Sleep -Seconds ($IntervalMinutes * 60)
     } else {
+        if ($null -ne $global:vm) {
+            Write-Log "Camera disconnected. Stopping background feed."
+            try { $global:vm.StopLiveView() } catch {}
+            $global:vm = $null
+        }
         Start-Sleep -Seconds 5
     }
 }
