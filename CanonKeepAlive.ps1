@@ -1,6 +1,6 @@
 # Canon DSLR Keep-Alive & Direct Live-View Engine
 # Loads DSLRCam.exe into PowerShell and calls MainViewModel.StartLiveView() directly in background.
-# 100% Headless. No App GUI Window Opens.
+# Sets working directory to Virtual Webcam folder to resolve vcam.dll driver dependency.
 
 param (
     [int]$IntervalMinutes = 2,  # Defaulted to 2 minutes for debugging
@@ -27,9 +27,16 @@ function Test-CanonUsbConnected {
 function Initialize-DirectLiveView {
     if (Test-Path $DslrCamPath) {
         try {
+            # Set working directory to Virtual Webcam folder so vcam.dll driver is found
+            $appDir = "C:\Program Files (x86)\digiCamControl Virtual Webcam"
+            [System.IO.Directory]::SetCurrentDirectory($appDir)
+            Set-Location $appDir
+
+            Write-Log "Set Working Directory to $appDir"
             Write-Log "Loading Virtual Webcam assembly ($DslrCamPath)..."
-            Add-Type -Path "C:\Program Files (x86)\digiCamControl Virtual Webcam\Canon.Eos.Framework.dll" -ErrorAction SilentlyContinue
-            Add-Type -Path "C:\Program Files (x86)\digiCamControl Virtual Webcam\CameraControl.Devices.dll" -ErrorAction SilentlyContinue
+            
+            Add-Type -Path (Join-Path $appDir "Canon.Eos.Framework.dll") -ErrorAction SilentlyContinue
+            Add-Type -Path (Join-Path $appDir "CameraControl.Devices.dll") -ErrorAction SilentlyContinue
 
             $asm = [System.Reflection.Assembly]::LoadFrom($DslrCamPath)
             $vmType = $asm.GetType("DSLRCam.ViewModel.MainViewModel")
